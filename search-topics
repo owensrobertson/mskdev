@@ -1,0 +1,86 @@
+# The following script is used to examine the MSK Kafka logs for entries that have  been pushed into the Kafka logs from user entity processing
+# this utility can be used to look for a given topics and topic-key (res_id) to examine based upon the type of update, datetime and values.
+# Keep points when examining the Kafka logs
+# 1 - Kafka logs are populated by changes to the MySQL database.  
+# 2 - Conversion data does not necessarily exist in these logs.  Only if a user has updated or created the entity.
+# 3 - The retension and subsequent history is determined by internal kafka parameters of the MSK cluster that currently uses a 
+# Offsets have been set to earliest by default
+#
+#!/bin/bash
+export BROKERS="${BrokerList}"
+export CON_CONFIG=client.properties
+export SUB1="research"
+SUB2='doc'
+echo "usage $0 [-a] <topic-name> <primary key value> <offset-backoff>  "
+
+if [ $1 = "-a" ]; then 
+	echo "Argument -a"
+	#shift +1
+	export TOPIC=${2}
+	#export offset_backoff=${3}
+	export PK=${3}
+	echo "Full TOPIC : ${TOPIC}  : OFFSET :${offset_backoff} : PK RES ID : ${PK}"
+else
+	export TOPIC=${1}
+	#export offset_backoff=${2}
+	export PK=${2}
+	echo "Statistics TOPIC : ${TOPIC}  : OFFSET :${offset_backoff} : PK RES ID : ${PK}"
+fi
+
+case "${TOPIC}" in 
+	prod_researcher)
+		echo "TOPIC : $TOPIC"
+		export srch_id='res_id';;
+	prod_researcher_authorships)
+		echo "TOPIC : $TOPIC"
+		export srch_id='res_id';;
+	"prod_researcher_groups")
+		echo "TOPIC : $TOPIC"
+		export srch_id='rg_id';;
+	"prod_researcher_group_child_groups")
+		echo "TOPIC : $TOPIC"
+		export srch_id='rg_id';;
+	"prod_researcher_group_researchers")
+		echo "TOPIC : $TOPIC"
+		export srch_id='rg_id';;
+	"prod_research_area")
+		echo "TOPIC : $TOPIC"
+		export srch_id='ra_id';;
+	"prod_research_area_docs")
+		echo "TOPIC : $TOPIC"
+		export srch_id='ra_id';;
+	"prod_document_set")
+		echo "TOPIC : $TOPIC"
+		export srch_id='ds_id';;
+	"prod_document_set")
+		echo "TOPIC : $TOPIC"
+		export srch_id='ds_id';;
+	*)
+		echo "$TOPIC :: is not valid "
+		echo "Use prod_reseacher prod_reseacher_authorships prod_reseacher_group prod_reseacher_group_child_groups prod_reseacher_group_researchers prod_reseach_area prod_reseach_area_docs prod_document_set prod_document_set_docs";;
+esac
+
+echo ":::${srch_id}"
+# sleep 4
+
+export var_offset='0'
+
+if [ $1 = "-a" ]; then
+	#set -x
+	kafka-run-class.sh kafka.tools.ConsoleConsumer --bootstrap-server "${BrokerList}" --topic ${TOPIC} --partition 0 --timeout-ms 6000 --offset $var_offset | jq -cr ". | select( ( .after.${srch_id}==${PK}   or  .before.${srch_id}==${PK} ) ) | ." |cat   >/tmp/${TOPIC}.${PK}.stats.json 2>&1
+	# set +x
+	#echo "Sample event message below  see  /tmp/$TOPIC.$PK.stats.json for details"
+	jq '.' /tmp/${TOPIC}.${PK}.stats.json |cat | head -29
+	echo "Sample event message below  see  /tmp/$TOPIC.$PK.stats.json for details"
+else
+	kafka-run-class.sh kafka.tools.ConsoleConsumer --bootstrap-server "${BrokerList}" --topic ${TOPIC} --partition 0 --timeout-ms 6000 --offset $var_offset | jq -cr ". | select( ( .after.${srch_id}==${PK}   or  .before.${srch_id}==${PK} ) ) | . " |cat   >/tmp/${TOPIC}.${PK}.stats.json 2>&1
+	while read line
+	do
+		msg_cnt=$(echo $line|awk '{print $1}') 
+		msg_ms=$(echo $line|awk -F, '{print $3}')
+		msg_dt=$(date -d @$((($msg_ms + 500)/1000)))
+		#set -x
+		echo "${msg_cnt} :: ${msg_dt}  :: ${line}" 
+		#set +x
+	done < <(jq -cr ". | select( ( .after.${srch_id}==${PK}  or  .before.${srch_id}==${PK} ) ) | [.op,.source.table,.ts_ms,.before.${srch_id},.after.${srch_id}]  " /tmp/${TOPIC}.${PK}.stats.json |uniq -c )
+fi

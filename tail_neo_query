@@ -1,0 +1,14 @@
+#set -x
+export GENDB=/var/tmp/snap/neo4j_generated_db
+export NEO4J_DATA=/opt/neo4j/neo4j_current/data
+export DB_DIR=data/databases
+export TX_DIR=data/transactions
+export DATABASE=test202202172028
+#du -sh ${NEO4J_DATA}/transactions/*
+#du -sh ${NEO4J_DATA}/databases/*
+input_id=${1}
+for hostip in `host prod-neo4j-core.hpcc-prod.scival.com|awk '{print $4}'`
+do
+	echo " Cluster host: $hostip ========================="
+	timeout 3 ssh -i ~/.scival.pem  -l ec2-user ${hostip} "tail -100f /opt/neo4j/neo4j_current/logs/query.log"
+done

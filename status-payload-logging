@@ -1,0 +1,38 @@
+export NEO4J_HOME=/opt/neo4j/neo4j_current
+export PATH=$PATH:$NEO4J_HOME/bin
+
+if [ -z $AWS_REGION ]; then
+	echo "setting AWS_REGION to us-east1 "
+	export AWS_REGION=us-east-1
+fi
+
+
+NC='\033[0m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+#
+setCredentials() {
+    echo "Setting database credentials."
+    CREDENTIALS=$(aws secretsmanager get-secret-value --secret-id scival_bigdata_neo4j_admin --query "SecretString" --region ${AWS_REGION})
+    err=$?
+    if [ ${err} -ne 0 ]; then
+        echo -e "${RED}Could not get secret with ID web_db_credentials.${NC}"
+        echo -e "${RED}Error code is ${err}.${NC}"
+        exit ${err}
+    fi
+    CREDENTIALS_FORMATTED=$(echo "${CREDENTIALS}" | tr -d "\\" | sed -e 's/^"//' -e 's/"$//')
+    USERNAME=$(echo "${CREDENTIALS_FORMATTED}" | jq -r .username)
+    PASSWORD=$(echo "${CREDENTIALS_FORMATTED}" | jq -r .password)
+    echo -e "${GREEN}Successfully set database credentials.${NC}"
+}
+
+setCredentials
+if [ -z $NEO_CONN ]; then
+	echo "NEO_CONN not set defaulting to cert-neo4j-core.hpcc-nonprod.scival.com or reset."
+	echo "export NEO_CONN=prod-neo4j-core-bolt.hpcc-prod.scival.com"
+	echo "export NEO_CONN=cert-neo4j-core.hpcc-nonprod.scival.com"
+fi
+echo "Logging into $NEO_CONN"
+$NEO4J_HOME/bin/cypher-shell -a neo4j://$NEO_CONN:7687 -d scivalprod --encryption true -u ${USERNAME} -p ${PASSWORD} <<EOF
+CALL dbms.listConfig("dbms.logs.query.parameter_logging_enabled") yield value,name,description;
+EOF

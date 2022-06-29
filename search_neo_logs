@@ -1,0 +1,48 @@
+#set -x
+export NEO4J_DATA=/opt/neo4j/neo4j_current/data
+export NEO4J_LOG=/opt/neo4j/neo4j_current/logs
+export PEM=/home/ec2-user/.HPCC-Prod.pem
+export PEM=/home/ec2-user/.scival.pem
+if  [[ $1 == '-a' ]] || [[ $2 == '-a' ]]; then
+        export SEARCH_FILES="*.log.[0-9]"
+        export SEARCH_TERM="'$2'"
+	export SEARCH_CMD="egrep ${SEARCH_TERM} ${NEO4J_LOG}/${SEARCH_FILES}"
+	echo $SEARCH_CMD
+elif  [ -z $1 ]; then
+        export SEARCH_FILES="*.log"
+	export SEARCH_CMD="egrep ERROR ${NEO4J_LOG}/${SEARCH_FILES} | egrep SINK |awk -F'SINK|{}' '{print \$1  \$3}' "
+	echo $SEARCH_CMD
+elif  [[ $1 == '-s' ]] || [[ $2 == '-s' ]]; then
+        export SEARCH_FILES="*.log.[0-9]"
+	export SEARCH_CMD="egrep ERROR ${NEO4J_LOG}/${SEARCH_FILES} | egrep SINK |awk -F'SINK|{}' '{print \$1  \$3}' | awk -F'- -' '{print \$2}'|uniq -c"
+	echo $SEARCH_CMD
+else
+        export SEARCH_FILES="*.log"
+        export SEARCH_TERM=$1
+        export SEARCH_CMD="egrep ${SEARCH_TERM} ${NEO4J_LOG}/${SEARCH_FILES}"
+        echo $SEARCH_CMD
+fi
+#sleep 2
+# Set Env
+# egrep SINK query.log.*|egrep ERROR|awk -F'SINK|{}' '{print $1"SINK:::"$3}'
+#set -x
+curr_ip=$(hostname --ip-address|awk '{print $2}')
+cert_env=$(host cert-neo4j-core.hpcc-nonprod.scival.com|egrep -c "${curr_ip}")
+prod_env=$(host prod-neo4j-core.hpcc-prod.scival.com|egrep -c "${curr_ip}")
+echo "Cert ${cert_env} Prod  ${prod_env}"
+if [ "$cert_env"  -ne 0 ]; then
+	ENV=CERT
+	CLUSTER=cert-neo4j-core.hpcc-nonprod.scival.com
+elif [ "$prod_env"  -ne 0 ]; then
+	ENV=PROD
+	CLUSTER=prod-neo4j-core.hpcc-prod.scival.com
+fi
+echo $SEARCH_CMD
+
+sleep 1
+for hostip in `host "${CLUSTER}" |awk '{print $4}'`
+do
+        echo " Cluster host: $hostip ========================="
+        #timeout 1 ssh -i ${PEM} -l ec2-user ${hostip} "egrep ${SEARCH_TERM}  ${NEO4J_LOG}/${SEARCH_FILES}"
+        timeout 1 ssh -i ${PEM} -l ec2-user ${hostip} "${SEARCH_CMD}"
+done
