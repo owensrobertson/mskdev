@@ -60,6 +60,99 @@ class Neo4jConnection:
         return response
 
 
+def analyze_researcher_authors_tmp(res_df):
+    if res_df.empty:
+        return res_df,res_df
+    #df.groupby('').groups
+    #print(res_count_df[res_count_df['sv_author_id'].isna()]['mod_dt','my_res_id','my_author_id'])
+
+    # Reset Pandas reporting display
+    pd.set_option("display.max_rows", 1000, "display.max_columns", 100)
+
+    #res_df =res_df[~res_df['sv_author_id'].isnull()]
+    #res_df = res_df[~res_df['my_res_id'].isin([9574530])]
+    #res_df = res_df.reset_index(drop=True)
+    # print("1-SHAPE-9574530: ",res_df[res_df['my_res_id'].isin([9574530])])
+    #print("SHAPE",res_df.shape,"      :res_df")
+    res_df_save=res_df
+    # Select all results that have an author id of NA from SciVal Graph
+    #res_df = res_df.reset_index(drop=True)
+    res_df_na=res_df[res_df['sv_author_id'].isna()]
+    res_df_na = res_df_na.reset_index(drop=True)
+
+    #res_df_na=res_df[res_df['sv_author_id'].isna()]
+    #res_df_na=res_df_na[res_df['sv_author_id'].isnull()]
+
+
+    #print("2-SHAPE-9574530: ",res_df[res_df['my_res_id'].isin([9574530])])
+
+    #print("SHAPE",res_df_na.shape,"      :res_df_na(sv-author-id present)")
+
+    # Exclude from this subset any place the sv-res-id is NA indicating no record exists
+    res_df_na=res_df_na[~res_df['sv_res_id'].isnull()]
+    # TEST
+    res_df_na=res_df_na[res_df['sv_author_id'].isnull()]
+    #print("SHAPE",res_df_na.shape,"      :res_df_na(remove res-id missing)")
+
+    # Reset index and level properties to default
+    res_df_na = res_df_na.reset_index(drop=True)
+
+    # print("3-SHAPE-9574530: ",res_df_na[res_df_na['my_res_id'].isin([9574530])])
+
+    # Extract unique author-ids from subset of missing author-ids and place into an integer list
+    #print("===============================================")
+    #print(res_df_na[["sv_res_id","my_author_id","sv_author_id"]])
+    #print("===============================================")
+    #print("===============================================")
+    #print(res_df_na[["my_author_id"]])
+    #print("===============================================")
+    res_auth_exception_list=res_df_na['my_author_id'].astype(int).unique().tolist()
+
+    # Create a sting based list of these exception author ids for Cypher query
+    # res_auth_exception_list = res_auth_exception_list.reset_index()
+    authors_list=', '.join([str(item) for item in res_auth_exception_list])
+    #size=len(authors_id)
+    authors_list='[' + authors_list + ']'
+    # print(res_auth_exception_list)
+    #print("AUTHORS_LIST",authors_list)
+
+    # Construct Cypher query to determine which are missing Authors vs. possible CDC issues.
+    authors_query1=''' with '''
+    authors_query2=''' as AuthorList unwind  AuthorList as authIds 
+    optional MATCH(p:Person) where p.personId = authIds with p.personId as pId,authIds
+    where pId is null return authIds as my_author_id'''
+    authors_query_final=authors_query1+authors_list+authors_query2
+    print("QUERY: ",authors_query_final)
+
+    # Execute Cypher to determine existing authors in SciVal Graph
+    # Note the author list is static and based upon the weekly Scopus extracts
+    res_miss_auth_df = pd.DataFrame([dict(_) for _ in neo4jConn.query(authors_query_final,db=scival_db)])
+    # print("MISSINGAUTH",res_miss_auth_df)
+
+    #print("SHAPE",res_miss_auth_df.shape,"      :res_miss_auth_df(List of Auths in SV Graph)")
+
+    # Determine how many of the author ids are simply not present in SciVal Graph,
+    # indicates known exceptions
+    res_miss_auth_list = res_miss_auth_df['my_author_id'].astype(int).unique().tolist()
+    #print("Missing Auth List",res_miss_auth_list)
+    # missing_authors_ids = ', '.join([str(item) for item in res_miss_auth_df])
+
+    count_missing_author_ids=res_df[res_df["my_author_id"].isin(res_miss_auth_list)].count()['my_res_id']
+    print("Found Missing Author Ids (false positives):",count_missing_author_ids)
+    res_df_na=res_df[~res_df['my_author_id'].isin(res_miss_auth_list)]
+    # print("SHAPE2: ",res_df[~res_df['my_author_id'].isin(res_miss_auth_list)])
+    #print("SHAPE",res_df_na.shape,"      :res_df_na(After Removed vals in list)")
+
+    res_df_na = res_df_na.reset_index(drop=True)
+
+    print("SHAPE",res_df_na[['mod_dt','my_res_id','my_author_id','sv_res_id','sv_author_id']])
+    #print("type:",type(res_miss_auth_list))
+
+    #x=res_auth_exception_list["my_author_id.tolist()
+
+    # print("SHAPE",res_df_na.shape,"      :res_df_na(After Removed vals in list)")
+    #print("SHAPE",res_df_na.keys)
+    return res_df_na,res_df_save
 
 
 
@@ -111,7 +204,7 @@ def prepare_researcher_count(rpt_level,startDt,mysql_uri,mysql_user,mysql_passwd
         case when row.author_id <> 0 and 
         row.author_id is not null then 1 else 0 end as 
         my_author_flg '''%(mysql_uri,mysql_user,mysql_passwd,startDt)
-    query_string2 = ''' return mod_dt,my_res_id,sv_res_id,my_author_id,sv_author_id,my_author_flg,sv_author_flg,
+    query_string2 = ''' return  mod_dt,my_res_id,sv_res_id,my_author_id,sv_author_id,my_author_flg,sv_author_flg,
             my_home_inst_id,sv_home_inst_id,my_version,sv_version '''
 
     #print( query_string1 + where_cond + query_string2)
@@ -157,131 +250,99 @@ def run_researcher_count(res_query,db):
 def analyze_result(user_entity,comp_results_df,rpt_level):
     ''' Analyze Result looks for any missing user entity key mismatch i.e. missing from graph
     the scival graph key value is expected to be in column 3 of the dataframe'''
-    print("ANALYZE RESULTS: %s"%(user_entity))
-    #print(comp_results_df.shape)
-    missing_key_df=comp_results_df   #[comp_results_df['sv_res_id'].isna()]
+
+    logging.info("ANALYZE RESULTS: %s"%(user_entity))
+    # keep a copy for processing resarchers
+    missing_key_df=comp_results_df
     missing_key_df = missing_key_df.reset_index(drop=True)
-    #print(missing_key_df.shape)
-    #missing_key_df=comp_results_df[comp_results_df['sv_res_id'].isna()]
-    #print(missing_key_df.shape)
 
-    # print(missing_key_df['sv_res_id'].head())
-    # missing_key_df=comp_results_df[comp_results_df.columns[2].isna()]
-    # res_df[~res_df['my_res_id'].isin([9574530])]
+    #logging.debug("DEBUG:"+'\t'+ comp_results_df.to_string().replace('\n', '\n\t'))
+    # "Author Analysis",missing_key_df[missing_key_df.columns[1]].count())
+    if user_entity == 'researcher':
+        comp_results_df = analyze_researcher_authors(comp_results_df)
+        comp_results_df = comp_results_df.reset_index(drop=True)
+        logging.debug("DEBUG:return: analyze researcher authors "+'\t'+ comp_results_df.to_string().replace('\n', '\n\t'))
 
-    if missing_key_df.empty and rpt_level=='summary':
-        print("RESULTS:No missing %s's identified: Systems in Sync on Researcher"%(user_entity))
-    elif rpt_level=='summary' and not (missing_key_df.empty) :
-        print(comp_results_df.iloc[:,2].name)
-        missing_key_df=comp_results_df[comp_results_df[comp_results_df.iloc[:,2].name].isna()]
-        missing_key_df = missing_key_df.reset_index(drop=True)
+    if comp_results_df.empty and rpt_level=='summary':
+        print("RESULTS: Summary : No missing %s's identified"%(user_entity))
+    elif  not (comp_results_df.empty) and rpt_level=='summary' :
+        #print(comp_results_df.iloc[:,2].name)
+        comp_results_df=comp_results_df[comp_results_df[comp_results_df.iloc[:,2].name].isna()]
+        comp_results_df = comp_results_df.reset_index(drop=True)
         print("ERRORS: Missing %s Need Correction"%(user_entity))
         pd.set_option("display.max_rows", 1000, "display.max_columns", 7)
         print("================= %s record errors ================="%(user_entity))
         #missing_res=comp_results_df[comp_results_df['sv_res_id'].isna()]
         # comp_results_df=comp_results_df[comp_results_df['sv_author_id'].isna()]
-
-        #missing_res=comp_results_df
-        #print(comp_results_df['sv_author_id'].isna())
-        print(missing_key_df)
         pd.set_option("display.max_rows", 1000, "display.max_columns", 7)
-        print(comp_results_df)
+        comp_results_df.to_csv(sys.stdout)
     elif rpt_level =='detail':
         comp_results_df.to_csv(sys.stdout)
 
 def analyze_researcher_authors(res_df):
     if res_df.empty:
-        return res_df,res_df
-    #df.groupby('').groups
-    #print(res_count_df[res_count_df['sv_author_id'].isna()]['mod_dt','my_res_id','my_author_id'])
-
+        return res_df
     # Reset Pandas reporting display
     pd.set_option("display.max_rows", 1000, "display.max_columns", 100)
-
-    #res_df =res_df[~res_df['sv_author_id'].isnull()] 
-    #res_df = res_df[~res_df['my_res_id'].isin([9574530])]
-    #res_df = res_df.reset_index(drop=True)
-    # print("1-SHAPE-9574530: ",res_df[res_df['my_res_id'].isin([9574530])])
-    #print("SHAPE",res_df.shape,"      :res_df")
-    res_df_save=res_df
+    #logging.debug("Author Analysis Source res_df:",res_df[res_df.columns[1]].count())
     # Select all results that have an author id of NA from SciVal Graph 
-    #res_df = res_df.reset_index(drop=True)
-    res_df_na=res_df[res_df['sv_author_id'].isna()] 
-    res_df_na = res_df_na.reset_index(drop=True)
-
-    #res_df_na=res_df[res_df['sv_author_id'].isna()] 
-    #res_df_na=res_df_na[res_df['sv_author_id'].isnull()] 
-
-    
-    #print("2-SHAPE-9574530: ",res_df[res_df['my_res_id'].isin([9574530])])
-
-    #print("SHAPE",res_df_na.shape,"      :res_df_na(sv-author-id present)")
+    res_auth_na_df=res_df[res_df['sv_author_id'].isna()]
+    res_auth_na_df = res_auth_na_df.reset_index(drop=True)
+    logging.debug("DEBUG:Author: Count and Set of Null Graph Author Id(sv_author_id): %i"%(len(res_auth_na_df)))
+    logging.debug('\t'+ res_auth_na_df.head(2).to_string().replace('\n', '\n\t'))
 
     # Exclude from this subset any place the sv-res-id is NA indicating no record exists
-    res_df_na=res_df_na[~res_df['sv_res_id'].isnull()]
+    res_auth_na_df=res_auth_na_df[~res_auth_na_df['sv_res_id'].isna()]
+    res_auth_na_df = res_auth_na_df.reset_index(drop=True)
+    logging.debug("DEBUG:Author: Count ad Set after Removal of Null Graph Researcher Id(sv_res_id): %i"%(len(res_auth_na_df)))
+    logging.debug('\t'+ res_auth_na_df.head(2).to_string().replace('\n', '\n\t'))
     # TEST
-    res_df_na=res_df_na[res_df['sv_author_id'].isnull()]
-    #print("SHAPE",res_df_na.shape,"      :res_df_na(remove res-id missing)")
+    #res_auth_na_df=res_auth_na_df[res_df['sv_author_id'].isnull()]
 
     # Reset index and level properties to default
-    res_df_na = res_df_na.reset_index(drop=True)
-
-    # print("3-SHAPE-9574530: ",res_df_na[res_df_na['my_res_id'].isin([9574530])])
-
-    # Extract unique author-ids from subset of missing author-ids and place into an integer list
-    #print("===============================================")
-    #print(res_df_na[["sv_res_id","my_author_id","sv_author_id"]])
-    #print("===============================================")
-    #print("===============================================")
-    #print(res_df_na[["my_author_id"]])
-    #print("===============================================")
-    res_auth_exception_list=res_df_na['my_author_id'].astype(int).unique().tolist()
-
+    if res_auth_na_df.empty:
+        return res_df,res_df
+    res_auth_exception_list=res_auth_na_df['my_author_id'].astype(int).unique().tolist()
+    logging.debug("DEBUG:Author: Count of Researchers with Missing Authors :%i"%(len(res_auth_exception_list)))
     # Create a sting based list of these exception author ids for Cypher query
     # res_auth_exception_list = res_auth_exception_list.reset_index()
     authors_list=', '.join([str(item) for item in res_auth_exception_list])
-    #size=len(authors_id)
     authors_list='[' + authors_list + ']'
-    # print(res_auth_exception_list)
-    #print("AUTHORS_LIST",authors_list)
-
     # Construct Cypher query to determine which are missing Authors vs. possible CDC issues.
     authors_query1=''' with '''
     authors_query2=''' as AuthorList unwind  AuthorList as authIds 
     optional MATCH(p:Person) where p.personId = authIds with p.personId as pId,authIds
-    where pId is null return authIds as my_author_id'''
+    where pId is null return distinct authIds as my_author_id'''
     authors_query_final=authors_query1+authors_list+authors_query2
-    print("QUERY: ",authors_query_final)
+
+    logging.debug("QUERY:Researcher Authorships Valdiation : %s"%(authors_query_final))
 
     # Execute Cypher to determine existing authors in SciVal Graph
     # Note the author list is static and based upon the weekly Scopus extracts
-    res_miss_auth_df = pd.DataFrame([dict(_) for _ in neo4jConn.query(authors_query_final,db=scival_db)])
-    # print("MISSINGAUTH",res_miss_auth_df)
-
-    #print("SHAPE",res_miss_auth_df.shape,"      :res_miss_auth_df(List of Auths in SV Graph)")
+    res_auth_notin_svg_df = pd.DataFrame([dict(_) for _ in neo4jConn.query(authors_query_final,db=scival_db)])
+    # print("MISSINGAUTH",res_auth_notin_svg_df)
 
     # Determine how many of the author ids are simply not present in SciVal Graph, 
     # indicates known exceptions
-    res_miss_auth_list = res_miss_auth_df['my_author_id'].astype(int).unique().tolist()
+    res_miss_auth_list = res_auth_notin_svg_df['my_author_id'].astype(int).unique().tolist()
     #print("Missing Auth List",res_miss_auth_list)
     # missing_authors_ids = ', '.join([str(item) for item in res_miss_auth_df])
 
-    count_missing_author_ids=res_df[res_df["my_author_id"].isin(res_miss_auth_list)].count()['my_res_id']
-    print("Found Missing Author Ids (false positives):",count_missing_author_ids)
-    res_df_na=res_df[~res_df['my_author_id'].isin(res_miss_auth_list)]
+    count_missing_author_ids=res_auth_na_df[res_auth_na_df["my_author_id"].isin(res_miss_auth_list)].count()['my_res_id']
+    logging.debug("DEBUG:Authors: Missing Entity Authors without a Scopus author-id (false positives):"+str(count_missing_author_ids))
+
+    res_auth_na_df=res_auth_na_df[~res_auth_na_df['my_author_id'].isin(res_miss_auth_list)]
+    logging.debug("DEBUG:Authors: Exceptions After Removing Entity Authors without a Scopus author-id :"+str(len(res_auth_na_df)))
+
+
+    print("LOGGING:Authors: res_auth_na_df is empty") if \
+         res_auth_na_df.empty  else logging.debug('\t'+ res_auth_na_df.to_string().replace('\n', '\n\t'))
     # print("SHAPE2: ",res_df[~res_df['my_author_id'].isin(res_miss_auth_list)])
     #print("SHAPE",res_df_na.shape,"      :res_df_na(After Removed vals in list)")
 
-    res_df_na = res_df_na.reset_index(drop=True)
+    res_auth_na_df = res_auth_na_df.reset_index(drop=True)
 
-    print("SHAPE",res_df_na[['mod_dt','my_res_id','my_author_id','sv_res_id','sv_author_id']])
-    #print("type:",type(res_miss_auth_list))
-
-    #x=res_auth_exception_list["my_author_id.tolist()
-
-    # print("SHAPE",res_df_na.shape,"      :res_df_na(After Removed vals in list)")
-    #print("SHAPE",res_df_na.keys)
-    return res_df_na,res_df_save
+    return res_auth_na_df
 
 def prepare_researcher_grp_count(rpt_level,startDt,mysql_uri,mysql_user,mysql_passwd):
     if rpt_level == 'summary':
@@ -427,13 +488,13 @@ def run_research_area_count(res_query,db):
     # print("found ",counter," error records")
 
 
-def environ_setup(env_setup):
+def environ_setup(env_setup,tunnel):
     print(env_setup)
 
-    if env_setup == "cert":
+    if env_setup == "cert" and tunnel:
         return 'certdb.nonprod.scival.com','scivalint','scivalkafka','test123passwd','neo4j+ssc://127.0.0.1:7687'
         # return 'certdb.nonprod.scival.com','scivalkafka','test123passwd'
-    elif env_setup == "prod":
+    elif env_setup == "prod" and tunnel:
         return 'proddb.scival.com','scivalprod','scivalkafka','test123passwd','neo4j+ssc://127.0.0.1:9687'
     else:
         return 'certdb.nonprod.scival.com','scivalint','scivalkafka','test123passwd'
@@ -453,27 +514,38 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-u", "--user-entity", dest = "audit_list", nargs='+', default = "all", help="researcher, researcher_grp, document_set, research_area")
     parser.add_argument("-a", "--audit-type", dest = "audit_type", default = "summary", help="summary|detail")
-    parser.add_argument("-e", "--env", dest = "environ", default = "cert", help="local|cert|prod")
+    parser.add_argument("-e", "--env", dest = "environ", nargs='+', default = "cert", help="cert|prod|cert tunnel")
     parser.add_argument("-d", "--start-date", dest = "last_mod_dt", default = "2022-06-01", help="2022-01-01")
-    parser.add_argument("-x", "--debug", dest = "debug_flg",action='store_true', default = "INFO", help="INFO|DEBUG")
+    parser.add_argument("-x", "--debug", dest = "debug_flg",action='store_true', default = False, help="INFO|DEBUG")
     if len(sys.argv)==1:
        parser.print_help(sys.stderr)
        sys.exit(1)
     args = parser.parse_args()
     audit_ue_list=list(args.audit_list)    
     audit_output_type=args.audit_type
-    audit_environ=args.environ
+
     audit_start_dt=args.last_mod_dt
     # audit_debug=args.debug_flg
-    audit_debug = logging.DEBUG if args.debug_flg =='DEBUG'  else logging.INFO
 
+    audit_env_list=args.environ
+    (audit_environ,audit_tunnel) = ( audit_env_list[0] ,True if( audit_env_list[1]=='tunnel') else False ) \
+        if (len(audit_env_list) == 2 ) else (audit_env_list[0],False)
+    print("env",audit_environ,audit_tunnel)
+    audit_debug = logging.DEBUG if args.debug_flg  else logging.INFO
+    # logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s:%(message)s' )
+
+    print("Debug Flag is ",audit_debug,args.debug_flg)
+    Neo4jConnection.enable_log(audit_debug, sys.stdout)
     # Establish the correct operating environment
     # Check the current host where executing.  If it is not CERT or PROD
     # then look for a localhost connection and assume CERT or Dev
-    audit_environ,scival_db,username,password,environ_uri = environ_setup(audit_environ)
+    audit_environ,scival_db,username,password,environ_uri = environ_setup(audit_environ,audit_tunnel)
 
-    Neo4jConnection.enable_log(audit_debug, sys.stdout)
-    # neo4jConn = Neo4jConnection(uri="neo4j+ssc:////prod-neo4j-core-bolt.hpcc-prod.scival.com:7687", user='neo4j', pwd='initial_value')
+
+    #Neo4jConnection.enable_log(logging.DEBUG, sys.stdout)
+
+# neo4jConn = Neo4jConnection(uri="neo4j+ssc:////prod-neo4j-core-bolt.hpcc-prod.scival.com:7687", user='neo4j', pwd='initial_value')
     neo4jConn = Neo4jConnection(uri=environ_uri,     user='neo4j',  pwd='initial_value')
     # conn = Neo4jConnection(uri="neo4j+ssc://127.0.0.1:7687",
     # print("neo4jConn:",neo4jConn)
